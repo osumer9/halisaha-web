@@ -298,6 +298,7 @@ function cardHtml(meta) {
         <h3>${esc(meta.place)}</h3>
         <p class="when"><span>${esc(fmt(dt, { weekday: 'long' }))}, ${esc(clock(dt))}</span>${d && d.price > 0 ? `<span class="price">${priceText(d)}</span>` : ''}${d ? '' : `<span>${meta.capacity} kişilik</span>`}</p>
         ${d?.notes ? `<p class="notes">${esc(d.notes)}</p>` : ''}
+        ${d ? `<button type="button" class="edit-link" data-action="edit" data-id="${id}">${d.notes ? 'Açıklamayı düzenle' : 'Açıklama ekle'}</button>` : ''}
       </div>
       <div class="status">${status}</div>
     </div>
@@ -384,6 +385,17 @@ function openJoin(id) {
   openDialog('joinDialog');
 }
 
+function openEdit(id) {
+  const d = state.unlocked.get(id)?.data;
+  if (!d) return;
+  state.pendingId = id;
+  const f = $('#editForm');
+  $('#editInfo').textContent = findMatch(id)?.place || '';
+  f.elements.notes.value = d.notes || '';
+  f.elements.price.value = d.price || 0;
+  openDialog('editDialog');
+}
+
 function openPlayer(mid, pid) {
   const p = state.unlocked.get(mid)?.data.players.find(x => x.id === pid);
   if (!p) return;
@@ -400,6 +412,7 @@ const actions = {
   reload: () => loadMatches(),
   unlock: id => openUnlock(id),
   join: id => openJoin(id),
+  edit: id => openEdit(id),
   player: (id, el) => openPlayer(id, el.dataset.player),
   view: (id, el) => { state.views.set(id, el.dataset.view); render(); },
   next: id => {
@@ -478,6 +491,18 @@ $('#joinForm').addEventListener('submit', e => {
     const team = await addPlayer(state.pendingId, f.elements.name.value.trim(), f.elements.goalkeeper.checked);
     closeDialog('joinDialog');
     toast(team === 'bench' ? 'Kadroya yazıldın.' : `Kadroya yazıldın, ${TEAMS[team].label} kalesindesin.`);
+  });
+});
+
+$('#editForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const f = e.currentTarget;
+  const notes = f.elements.notes.value.trim();
+  const price = Number(f.elements.price.value);
+  run(async () => {
+    await save(state.pendingId, d => { d.notes = notes; d.price = price; });
+    closeDialog('editDialog');
+    toast('Maç bilgileri kaydedildi.');
   });
 });
 

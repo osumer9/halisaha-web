@@ -87,6 +87,18 @@
   </form>
 </dialog>
 
+<dialog id="editDialog" class="modal">
+  <form id="editForm" class="dialog-body">
+    <div class="modal-head"><h2>Maçı düzenle</h2><button type="button" class="close" data-close="editDialog" aria-label="Kapat">✕</button></div>
+    <p id="editInfo" class="muted"></p>
+    <label>Açıklama<textarea name="notes" rows="3" maxlength="300" placeholder="Buluşma saati, forma rengi…"></textarea></label>
+    <label>Saha ücreti (₺)<input name="price" type="number" min="0" step="1" required></label>
+    <p class="small muted">Saha, tarih ve kişi sayısı sonradan değiştirilemez.</p>
+    <p class="dialog-error" hidden></p>
+    <div class="modal-actions"><button type="button" class="btn" data-close="editDialog">Vazgeç</button><button class="btn primary" type="submit">Kaydet</button></div>
+  </form>
+</dialog>
+
 <dialog id="playerDialog" class="modal">
   <div class="dialog-body">
     <div class="modal-head"><h2 id="playerName"></h2><button type="button" class="close" data-close="playerDialog" aria-label="Kapat">✕</button></div>
