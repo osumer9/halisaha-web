@@ -334,9 +334,19 @@ function render() {
   $('#pastCount').textContent = past.length;
   $$('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === state.tab)));
   renderNext(upcoming[0]);
+  updateTitle();
   const items = state.tab === 'upcoming' ? upcoming : past;
   $('#matchList').innerHTML = items.length ? items.map(cardHtml).join('') : emptyHtml();
 }
+
+// Sekme başlığı: bağlantıdaki (#mac=…) maçın yeri ve günü; maç seçili değilse site adı.
+function updateTitle() {
+  const id = location.hash.match(/^#mac=([a-f0-9-]{36})$/)?.[1];
+  const m = id && findMatch(id);
+  const d = m && when(m);
+  document.title = m ? `${m.place} · ${dayLabel(d)} ${clock(d)}` : 'Halı Saha';
+}
+window.addEventListener('hashchange', updateTitle);
 
 function renderNext(next) {
   const el = $('#nextMatch');

@@ -74,7 +74,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 84px; }
-.brand { font-family: var(--display); font-weight: 700; font-style: italic; font-size: 26px; letter-spacing: .01em; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 700; font-style: italic; font-size: 26px; letter-spacing: .01em; }
+.brand img { width: 32px; height: 32px; flex: none; box-shadow: 0 0 20px rgba(var(--glow), .18); border-radius: 8px; }
 .hero { padding-top: 34px; }
 .hero h1 { margin: 0; font-family: var(--display); font-weight: 800; font-style: italic; font-size: clamp(58px, 10vw, 120px); line-height: .88; letter-spacing: -.01em; text-shadow: 0 4px 30px rgba(0, 0, 0, .55); max-width: 9ch; }
 .next-wrap { margin-top: 22px; min-height: 44px; }
