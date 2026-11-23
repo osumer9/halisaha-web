@@ -44,6 +44,64 @@ function priceText(d) {
   return n ? `Kişi başı ${money(Math.ceil(d.price / n))}` : `Saha ücreti ${money(d.price)}`;
 }
 
+// ---------- Diziliş ----------
+// Her saha oyuncusunun bir mevkisi var: D (defans), M (orta saha), F (forvet).
+// Takımın dizilişi bu sayılardan oluşur; hazır diziliş seçilince mevkiler sırayla yeniden dağıtılır.
+const LINES = ['D', 'M', 'F'];
+const LINE_NAMES = { D: 'Defans', M: 'Orta saha', F: 'Forvet' };
+const PRESETS = {
+  1: [[0, 1, 0]],
+  2: [[1, 0, 1]],
+  3: [[1, 1, 1], [2, 0, 1], [1, 0, 2]],
+  4: [[2, 1, 1], [1, 2, 1], [2, 0, 2], [1, 1, 2]],
+  5: [[2, 2, 1], [3, 1, 1], [2, 1, 2], [1, 3, 1], [1, 2, 2]],
+  6: [[3, 2, 1], [2, 3, 1], [3, 1, 2], [2, 2, 2], [1, 3, 2]],
+  7: [[3, 3, 1], [3, 2, 2], [2, 3, 2], [3, 1, 3], [2, 4, 1]],
+  8: [[3, 4, 1], [4, 3, 1], [3, 3, 2], [4, 2, 2], [3, 2, 3]],
+  9: [[4, 4, 1], [3, 4, 2], [4, 3, 2], [3, 3, 3], [4, 2, 3]],
+  10: [[4, 4, 2], [4, 3, 3], [3, 5, 2], [4, 5, 1], [3, 4, 3]]
+};
+const shapeKey = shape => shape.join('-');
+// Orta sahasız dizilişler kısaca yazılır (2-0-1 → 2-1); diğer boş hatlar karışmasın diye 0 olarak kalır.
+const shapeLabel = ([back, mid, front]) => (mid === 0 && back > 0 && front > 0 ? `${back}-${front}` : [back, mid, front].join('-'));
+
+function presetsFor(n) {
+  if (n < 1) return [];
+  if (PRESETS[n]) return PRESETS[n];
+  const back = Math.ceil(n * 0.4), front = Math.max(1, Math.round(n * 0.2));
+  return [[back, n - back - front, front]];
+}
+
+// Takımı kaleci + üç hatta ayırır. Mevkisi olmayan (yeni gelen ya da eski kayıtlı) oyuncular
+// varsayılan dizilişte en çok eksiği olan hatta yerleşir.
+function lineup(d, team) {
+  const people = d.players.filter(p => p.team === team);
+  const gk = people.find(p => p.goalkeeper);
+  const outfield = people.filter(p => p !== gk);
+  const lines = { D: [], M: [], F: [] };
+  const loose = [];
+  for (const p of outfield) (LINES.includes(p.pos) ? lines[p.pos] : loose).push(p);
+  const target = presetsFor(outfield.length)[0] || [0, 0, 0];
+  const gap = k => target[LINES.indexOf(k)] - lines[k].length;
+  for (const p of loose) lines[LINES.reduce((best, k) => (gap(k) > gap(best) ? k : best), 'M')].push(p);
+  return { gk, lines, shape: LINES.map(k => lines[k].length) };
+}
+
+const orderedTeam = (d, team) => {
+  if (team === 'bench') return teamOf(d, 'bench');
+  const { gk, lines } = lineup(d, team);
+  return [...(gk ? [gk] : []), ...LINES.flatMap(k => lines[k])];
+};
+
+// Kaydetmeden önce mevkiler sabitlenir: takımdaki herkesin bir hattı olur, bekleyen ve kalecilerde mevki tutulmaz.
+function settle(d) {
+  for (const p of d.players) if (p.team === 'bench' || p.goalkeeper) delete p.pos;
+  for (const t of ['A', 'B']) {
+    const { lines } = lineup(d, t);
+    for (const k of LINES) for (const p of lines[k]) p.pos = k;
+  }
+}
+
 function dayLabel(d) {
   const midnight = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((midnight(d) - midnight(new Date())) / 864e5);
@@ -179,6 +237,7 @@ async function save(id, change) {
   for (const t of ['A', 'B']) {
     if (next.players.filter(x => x.team === t && x.goalkeeper).length > 1) throw Error(`${TEAMS[t].label} kalesinde zaten bir kaleci var.`);
   }
+  settle(next);
   const payload = await encryptData(next, u.key);
   try {
     const response = await request(`/matches/${id}`, { method: 'PUT', body: JSON.stringify({ proof: u.proof, revision: u.revision, payload }) });
@@ -210,11 +269,24 @@ async function addPlayer(id, name, goalkeeper) {
   return team;
 }
 
-async function movePlayer(id, playerId, team) {
+// pos verilmezse oyuncu yeni takımında boşluğu olan hatta yerleşir.
+async function movePlayer(id, playerId, team, pos) {
   await save(id, d => {
     const p = d.players.find(x => x.id === playerId);
     if (!p) throw Error('Oyuncu bulunamadı.');
+    if (pos) p.pos = pos;
+    else if (p.team !== team) delete p.pos;
     p.team = team;
+  });
+}
+
+async function applyFormation(id, team, shape) {
+  await save(id, d => {
+    const { lines } = lineup(d, team);
+    const ordered = LINES.flatMap(k => lines[k]);
+    if (ordered.length !== shape.reduce((a, b) => a + b, 0)) throw Error('Kadro bu sırada değişti, tekrar dene.');
+    let i = 0;
+    LINES.forEach((k, li) => { for (let c = 0; c < shape[li]; c++) ordered[i++].pos = k; });
   });
 }
 
@@ -244,9 +316,10 @@ function whatsappText(meta, d) {
   lines.push(`👥 ${n}/${meta.capacity}${missing > 0 ? ` (${missing} kişi eksik)` : ', kadro tamam'}`);
   if (d.notes) lines.push(`📝 ${d.notes}`);
   for (const t of ['A', 'B', 'bench']) {
-    const people = teamOf(d, t);
+    const people = orderedTeam(d, t);
     if (t === 'bench' && !people.length) continue;
-    lines.push('', `${TEAMS[t].emoji} *${TEAMS[t].label}* (${people.length})`);
+    const shape = t === 'bench' ? '' : shapeLabel(lineup(d, t).shape);
+    lines.push('', `${TEAMS[t].emoji} *${TEAMS[t].label}* (${people.length})${shape ? ` · ${shape}` : ''}`);
     if (!people.length) lines.push('—');
     people.forEach((p, i) => lines.push(`${i + 1}. ${p.name}${p.goalkeeper ? ' 🧤' : ''}`));
   }
@@ -331,30 +404,48 @@ function chipHtml(mid, p) {
   return `<div class="chip ${cls}${p.goalkeeper ? ' gk' : ''}" role="button" tabindex="0" draggable="true" data-action="player" data-id="${mid}" data-player="${esc(p.id)}" title="${esc(p.name)}">${p.goalkeeper ? '<span aria-label="Kaleci">🧤</span>' : ''}<span class="nm">${esc(p.name)}</span></div>`;
 }
 
+// Saha yarısı: ceza sahasında kaleci, sonra kaleden orta çizgiye defans, orta saha, forvet hatları.
 function halfHtml(mid, d, team) {
-  const people = teamOf(d, team);
-  const gk = people.find(p => p.goalkeeper);
-  const field = people.filter(p => p !== gk);
+  const { gk, lines, shape } = lineup(d, team);
+  const empty = shape.every(x => x === 0);
+  const line = k => {
+    const chips = lines[k].map(p => chipHtml(mid, p)).join('') || (empty && k === 'M' ? '<span class="empty-mini">Oyuncu yok</span>' : '');
+    return `<div class="line${chips ? '' : ' is-empty'}" data-drop-team="${team}" data-drop-pos="${k}" data-id="${mid}" title="${LINE_NAMES[k]}">${chips}</div>`;
+  };
   return `<div class="half ${team.toLowerCase()}" data-drop-team="${team}" data-id="${mid}">
     <div class="box">${gk ? chipHtml(mid, gk) : '<span class="gk-empty"><b>🧤</b>Kaleci yok</span>'}</div>
-    <div class="field">${field.length ? field.map(p => chipHtml(mid, p)).join('') : '<span class="empty-mini">Oyuncu yok</span>'}</div>
+    ${LINES.map(line).join('')}
   </div>`;
+}
+
+function formationHtml(mid, d, team) {
+  const { shape } = lineup(d, team);
+  const n = shape.reduce((a, b) => a + b, 0);
+  const presets = presetsFor(n);
+  const current = shapeKey(shape);
+  const isPreset = presets.some(s => shapeKey(s) === current);
+  const options = isPreset ? presets : [...presets, shape];
+  const title = `<span>${team} dizilişi</span>`;
+  const cls = `formation ${team.toLowerCase()}`;
+  if (options.length < 2) return `<div class="${cls}">${title}<b>${n ? shapeLabel(shape) : '—'}</b></div>`;
+  return `<label class="${cls}">${title}<select data-formation="${team}" data-id="${mid}">${options.map(s => `<option value="${shapeKey(s)}"${shapeKey(s) === current ? ' selected' : ''}>${s === shape && !isPreset ? shapeKey(s) : shapeLabel(s)}</option>`).join('')}</select></label>`;
 }
 
 function pitchHtml(mid, d) {
   const bench = teamOf(d, 'bench');
   return `<div class="pitch">${halfHtml(mid, d, 'A')}${halfHtml(mid, d, 'B')}</div>
+    <div class="formations">${formationHtml(mid, d, 'A')}${formationHtml(mid, d, 'B')}</div>
     <div class="bench-row" data-drop-team="bench" data-id="${mid}">
       <span class="label">Bekleyenler<b>${bench.length}</b></span>
       <div class="bench-list">${bench.map(p => chipHtml(mid, p)).join('')}</div>
     </div>
-    <p class="hint-line">Oyuncuya dokun: takımını değiştir, kaleci yap ya da çıkar.</p>`;
+    <p class="hint-line">Oyuncuya dokun: takımını ya da mevkisini değiştir, kaleci yap.</p>`;
 }
 
 function rosterHtml(d) {
-  const cols = ['A', 'B', 'bench'].map(t => ({ t, people: teamOf(d, t) })).filter(c => c.t !== 'bench' || c.people.length);
+  const cols = ['A', 'B', 'bench'].map(t => ({ t, people: orderedTeam(d, t) })).filter(c => c.t !== 'bench' || c.people.length);
   return `<div class="roster">${cols.map(({ t, people }) => `<section class="roster-col ${t === 'bench' ? 'bench' : t.toLowerCase()}">
-      <h4>${TEAMS[t].label}<span>${people.length}</span></h4>
+      <h4>${TEAMS[t].label}<span>${people.length}${t !== 'bench' && shapeLabel(lineup(d, t).shape) ? ` · ${shapeLabel(lineup(d, t).shape)}` : ''}</span></h4>
       ${people.length ? `<ol>${people.map(p => `<li>${esc(p.name)}${p.goalkeeper ? ' 🧤' : ''}</li>`).join('')}</ol>` : '<p class="muted">Henüz kimse yok</p>'}
     </section>`).join('')}</div>`;
 }
@@ -404,6 +495,13 @@ function openPlayer(mid, pid) {
   $('#gkToggle').checked = !!p.goalkeeper;
   $('#gkHint').hidden = p.team === 'bench';
   $$('#playerDialog [data-team]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.team === p.team)));
+  const onField = p.team !== 'bench' && !p.goalkeeper;
+  $('#posWrap').hidden = !onField;
+  if (onField) {
+    const { lines } = lineup(state.unlocked.get(mid).data, p.team);
+    const current = LINES.find(k => lines[k].includes(p));
+    $$('#posWrap [data-pos]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pos === current)));
+  }
   openDialog('playerDialog');
 }
 
@@ -525,6 +623,16 @@ $$('#playerDialog [data-team]').forEach(b => b.addEventListener('click', () => {
   });
 }));
 
+$$('#playerDialog [data-pos]').forEach(b => b.addEventListener('click', () => {
+  const { mid, pid } = state.sheet;
+  if (b.getAttribute('aria-pressed') === 'true') { closeDialog('playerDialog'); return; }
+  run(async () => {
+    const p = state.unlocked.get(mid).data.players.find(x => x.id === pid);
+    await movePlayer(mid, pid, p.team, b.dataset.pos);
+    closeDialog('playerDialog');
+  });
+}));
+
 $('#removePlayer').addEventListener('click', () => {
   const { mid, pid } = state.sheet;
   if (!confirm(`${$('#playerName').textContent} kadrodan çıkarılsın mı?`)) return;
@@ -565,9 +673,23 @@ list.addEventListener('drop', e => {
   const d = dragging;
   dragging = null;
   if (d.id !== zone.dataset.id) return;
-  const p = state.unlocked.get(d.id)?.data.players.find(x => x.id === d.player);
-  if (!p || p.team === zone.dataset.dropTeam) return;
-  run(() => movePlayer(d.id, d.player, zone.dataset.dropTeam));
+  const data = state.unlocked.get(d.id)?.data;
+  const p = data?.players.find(x => x.id === d.player);
+  if (!p) return;
+  const { dropTeam: team, dropPos: pos } = zone.dataset;
+  if (p.team === team) {
+    // Aynı takım içinde sadece başka bir hatta bırakılırsa mevki değişir.
+    if (!pos || p.goalkeeper || team === 'bench') return;
+    if (lineup(data, team).lines[pos].includes(p)) return;
+  }
+  run(() => movePlayer(d.id, d.player, team, p.goalkeeper ? undefined : pos));
+});
+
+list.addEventListener('change', e => {
+  const select = e.target.closest('select[data-formation]');
+  if (!select) return;
+  const shape = select.value.split('-').map(Number);
+  run(() => applyFormation(select.dataset.id, select.dataset.formation, shape), () => render());
 });
 
 // ---------- Başlangıç ----------
@@ -583,7 +705,7 @@ list.addEventListener('drop', e => {
 
 // Başkasının kaydı elle yenilemeden görünsün diye 30 sn'de bir sessizce güncellenir.
 setInterval(async () => {
-  if (!API || state.busy || dragging || document.visibilityState === 'hidden' || $$('dialog').some(d => d.open)) return;
+  if (!API || state.busy || dragging || document.visibilityState === 'hidden' || $$('dialog').some(d => d.open) || document.activeElement?.matches('#matchList select')) return;
   try {
     const summaries = await request('/matches');
     state.matches = summaries.matches || [];
