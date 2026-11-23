@@ -1,11 +1,108 @@
 <!doctype html>
-<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b1320"><title>Halı Saha — Maç Merkezi</title><link rel="stylesheet" href="style.css"></head>
-<body><div class="shell">
-<header class="header"><div class="brand"><div class="brand-icon">⚽</div><div><strong>HALI SAHA</strong><span>Maç merkezi</span></div></div><div class="header-right"><span id="syncBadge" class="sync-badge">Bağlantı kontrol ediliyor</span><button id="newMatchButton" class="primary">+ Maç ekle</button></div></header>
-<section class="hero"><div><p class="eyebrow">ARKADAŞLAR ARASI ORGANİZASYON</p><h1>Maç hazır.<br><em>Kadro tamam mı?</em></h1><p>Maçlarını planla, kadroya yazıl, takımları oluştur.</p></div><div class="hero-ball">⚽</div></section>
-<main><div class="section-title"><h2>Maçlar</h2><div class="tabs"><button class="tab active" data-tab="upcoming">Gelecek <span id="upcomingCount">0</span></button><button class="tab" data-tab="past">Geçmiş <span id="pastCount">0</span></button></div></div><div id="alert" class="alert hidden" role="status"></div><div id="matchList" class="match-list"></div></main>
-<footer>Hesapsız, maç başına şifreli. · <button class="link-button" id="refreshButton">Listeyi yenile ↻</button></footer></div>
-<dialog id="matchDialog" class="modal"><form id="matchForm" class="dialog-body"><div class="modal-head"><h2>Yeni maç oluştur</h2><button type="button" class="close" data-close="matchDialog">✕</button></div><label>Saha / yer<input name="place" placeholder="Örn. Ataşehir Halı Saha" maxlength="100" required></label><div class="two-col"><label>Tarih<input name="date" type="date" required></label><label>Saat<input name="time" type="time" required></label></div><div class="two-col"><label>Kapasite<input name="capacity" type="number" min="4" max="40" value="14" required></label><label>Saha ücreti (₺)<input name="price" type="number" min="0" step="1" value="0" required></label></div><label>Not<textarea name="notes" rows="2" maxlength="300" placeholder="Forma, buluşma saati... (isteğe bağlı)"></textarea></label><label>Bu maça özel şifre<input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="En az 8 karakter" required></label><label>Şifreyi tekrar gir<input name="confirm" type="password" autocomplete="new-password" minlength="8" required></label><label>Maç oluşturma kodu <span class="hint">(sistem yöneticisi ayarladıysa)</span><input name="createCode" type="password" autocomplete="off" placeholder="İsteğe bağlı"></label><p class="muted small">Saha, tarih ve kapasite listeleme için açık kalır. Ücret, notlar, oyuncular ve takımlar şifrelenir. Şifre kaybolursa içerik kurtarılamaz.</p><div class="modal-actions"><button type="button" class="secondary" data-close="matchDialog">Vazgeç</button><button class="primary" type="submit">Maçı oluştur</button></div></form></dialog>
-<dialog id="unlockDialog" class="modal"><form id="unlockForm" class="dialog-body"><div class="modal-head"><h2>Maçı aç</h2><button type="button" class="close" data-close="unlockDialog">✕</button></div><p id="unlockInfo" class="muted"></p><label>Maç şifresi<input name="password" type="password" autocomplete="off" required></label><p class="muted small">Şifre yalnızca bu sekme açıkken bellekte tutulur.</p><div class="modal-actions"><button type="button" class="secondary" data-close="unlockDialog">Vazgeç</button><button class="primary" type="submit">Kilidi aç</button></div></form></dialog>
-<dialog id="joinDialog" class="modal"><form id="joinForm" class="dialog-body"><div class="modal-head"><h2>Maça katıl</h2><button type="button" class="close" data-close="joinDialog">✕</button></div><p id="joinInfo" class="muted"></p><label>Adın / lakabın<input name="name" maxlength="40" placeholder="Örn. Oğul" required></label><label class="checkline"><input name="goalkeeper" type="checkbox"> 🧤 Kaleciyim</label><p class="muted small">Kaleciler takım başına en fazla bir kişi olabilir. Takımları şifreyi bilen herkes değiştirebilir.</p><div class="modal-actions"><button type="button" class="secondary" data-close="joinDialog">Vazgeç</button><button class="primary" type="submit">Kadroya yazıl</button></div></form></dialog>
-<script src="config.js"></script><script src="app.js" defer></script></body></html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#08161d">
+<title>Halı Saha</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;1,700;1,800&family=Barlow:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="stadium">
+  <span class="lamp left" aria-hidden="true"></span>
+  <span class="lamp right" aria-hidden="true"></span>
+  <div class="pitch-3d" aria-hidden="true">
+    <div class="lines"><i class="box-l"></i><i class="box-r"></i><i class="spot"></i></div>
+  </div>
+  <div class="shell topbar">
+    <div class="brand"><span aria-hidden="true">⚽</span> Halı Saha</div>
+    <button id="newMatchButton" class="btn primary" data-action="new">+ Maç ekle</button>
+  </div>
+  <div class="shell hero">
+    <h1>Kadro tamam mı?</h1>
+    <div id="nextMatch" class="next-wrap"></div>
+  </div>
+</header>
+
+<main class="shell">
+  <div class="list-head">
+    <div class="tabs" role="tablist" aria-label="Maçlar">
+      <button class="tab" role="tab" data-tab="upcoming" aria-selected="true">Gelecek <span id="upcomingCount">0</span></button>
+      <button class="tab" role="tab" data-tab="past" aria-selected="false">Geçmiş <span id="pastCount">0</span></button>
+    </div>
+    <button id="refreshButton" class="icon-btn" type="button" aria-label="Listeyi yenile" title="Listeyi yenile">↻</button>
+  </div>
+  <div id="matchList" class="match-list"></div>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<dialog id="matchDialog" class="modal">
+  <form id="matchForm" class="dialog-body">
+    <div class="modal-head"><h2>Yeni maç</h2><button type="button" class="close" data-close="matchDialog" aria-label="Kapat">✕</button></div>
+    <label>Saha<input name="place" placeholder="Örn. Ataşehir Halı Saha" maxlength="100" required></label>
+    <div class="two-col">
+      <label>Tarih<input name="date" type="date" required></label>
+      <label>Saat<input name="time" type="time" required></label>
+    </div>
+    <div class="two-col">
+      <label>Kaç kişi?<input name="capacity" type="number" min="4" max="40" value="14" required></label>
+      <label>Saha ücreti (₺)<input name="price" type="number" min="0" step="1" value="0" required></label>
+    </div>
+    <label>Not<textarea name="notes" rows="2" maxlength="300" placeholder="Buluşma saati, forma rengi…"></textarea></label>
+    <div class="two-col">
+      <label>Maç şifresi<input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="En az 8 karakter" required></label>
+      <label>Şifre tekrar<input name="confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+    </div>
+    <label>Oluşturma kodu <span class="hint">varsa</span><input name="createCode" type="password" autocomplete="off"></label>
+    <p class="small muted">Şifreyi unutursan maç bir daha açılamaz.</p>
+    <p class="dialog-error" hidden></p>
+    <div class="modal-actions"><button type="button" class="btn" data-close="matchDialog">Vazgeç</button><button class="btn primary" type="submit">Maçı oluştur</button></div>
+  </form>
+</dialog>
+
+<dialog id="unlockDialog" class="modal">
+  <form id="unlockForm" class="dialog-body">
+    <div class="modal-head"><h2>Maçı aç</h2><button type="button" class="close" data-close="unlockDialog" aria-label="Kapat">✕</button></div>
+    <p id="unlockInfo" class="muted"></p>
+    <label>Maç şifresi<input name="password" type="password" autocomplete="off" required></label>
+    <p class="dialog-error" hidden></p>
+    <div class="modal-actions"><button type="button" class="btn" data-close="unlockDialog">Vazgeç</button><button class="btn primary" type="submit">Aç</button></div>
+  </form>
+</dialog>
+
+<dialog id="joinDialog" class="modal">
+  <form id="joinForm" class="dialog-body">
+    <div class="modal-head"><h2>Kadroya yazıl</h2><button type="button" class="close" data-close="joinDialog" aria-label="Kapat">✕</button></div>
+    <p id="joinInfo" class="muted"></p>
+    <label>Adın ya da lakabın<input name="name" maxlength="40" placeholder="Örn. Kaptan" required></label>
+    <label class="gk-toggle"><span>🧤 Kaleciyim</span><input name="goalkeeper" type="checkbox"></label>
+    <p class="small muted">Kalesi boş bir takım varsa doğrudan oraya geçersin.</p>
+    <p class="dialog-error" hidden></p>
+    <div class="modal-actions"><button type="button" class="btn" data-close="joinDialog">Vazgeç</button><button class="btn primary" type="submit">Kadroya yazıl</button></div>
+  </form>
+</dialog>
+
+<dialog id="playerDialog" class="modal">
+  <div class="dialog-body">
+    <div class="modal-head"><h2 id="playerName"></h2><button type="button" class="close" data-close="playerDialog" aria-label="Kapat">✕</button></div>
+    <label class="gk-toggle"><span>🧤 Kaleci</span><input id="gkToggle" type="checkbox"></label>
+    <p id="gkHint" class="small muted">Takımdayken değiştirirsen bekleyenlere alınır.</p>
+    <div class="team-pick" role="group" aria-label="Takım">
+      <button type="button" class="a" data-team="A">Takım A</button>
+      <button type="button" class="b" data-team="B">Takım B</button>
+      <button type="button" class="bench" data-team="bench">Bekleyen</button>
+    </div>
+    <p class="dialog-error" hidden></p>
+    <div class="modal-actions split"><button type="button" id="removePlayer" class="btn danger">Kadrodan çıkar</button><button type="button" class="btn" data-close="playerDialog">Tamam</button></div>
+  </div>
+</dialog>
+
+<script src="config.js"></script>
+<script src="app.js" defer></script>
+</body>
+</html>
