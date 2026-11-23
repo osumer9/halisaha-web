@@ -37,6 +37,13 @@ const findMatch = id => state.matches.find(m => m.id === id);
 // Takım listesi: kaleci her zaman en üstte.
 const teamOf = (d, team) => d.players.filter(p => p.team === team).sort((a, b) => Number(!!b.goalkeeper) - Number(!!a.goalkeeper));
 
+// Saha ücreti kapasiteye değil kayıtlı oyuncu sayısına bölünür; ücret eksik kalmasın diye yukarı yuvarlanır.
+function priceText(d) {
+  if (!(d.price > 0)) return '';
+  const n = d.players.length;
+  return n ? `Kişi başı ${money(Math.ceil(d.price / n))}` : `Saha ücreti ${money(d.price)}`;
+}
+
 function dayLabel(d) {
   const midnight = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((midnight(d) - midnight(new Date())) / 864e5);
@@ -233,7 +240,7 @@ function whatsappText(meta, d) {
   const n = d.players.length;
   const missing = meta.capacity - n;
   const lines = [`⚽ *${meta.place}*`, `📅 ${longDay(dt)}, ${clock(dt)}`];
-  if (d.price > 0) lines.push(`💸 Kişi başı ${money(d.price / meta.capacity)}`);
+  if (d.price > 0) lines.push(`💸 ${priceText(d)}${n ? ` (toplam ${money(d.price)})` : ''}`);
   lines.push(`👥 ${n}/${meta.capacity}${missing > 0 ? ` (${missing} kişi eksik)` : ', kadro tamam'}`);
   if (d.notes) lines.push(`📝 ${d.notes}`);
   for (const t of ['A', 'B', 'bench']) {
@@ -289,7 +296,7 @@ function cardHtml(meta) {
       <div class="date"><b>${dt.getDate()}</b><span>${esc(fmt(dt, { month: 'short' }))}</span></div>
       <div class="info">
         <h3>${esc(meta.place)}</h3>
-        <p class="when"><span>${esc(fmt(dt, { weekday: 'long' }))}, ${esc(clock(dt))}</span>${d && d.price > 0 ? `<span class="price">Kişi başı ${money(d.price / meta.capacity)}</span>` : ''}${d ? '' : `<span>${meta.capacity} kişilik</span>`}</p>
+        <p class="when"><span>${esc(fmt(dt, { weekday: 'long' }))}, ${esc(clock(dt))}</span>${d && d.price > 0 ? `<span class="price">${priceText(d)}</span>` : ''}${d ? '' : `<span>${meta.capacity} kişilik</span>`}</p>
         ${d?.notes ? `<p class="notes">${esc(d.notes)}</p>` : ''}
       </div>
       <div class="status">${status}</div>
