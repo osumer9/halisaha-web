@@ -18,7 +18,8 @@ const state = {
 const TEAMS = {
   A: { label: 'Takım A', emoji: '🟠' },
   B: { label: 'Takım B', emoji: '🔵' },
-  bench: { label: 'Bekleyenler', emoji: '⏳' }
+  bench: { label: 'Bekleyenler', emoji: '⏳' },
+  reserve: { label: 'Yedekler', emoji: '🔁' }
 };
 
 // ---------- Yardımcılar ----------
@@ -36,12 +37,28 @@ const byDate = (a, b) => a.dateTime.localeCompare(b.dateTime);
 const findMatch = id => state.matches.find(m => m.id === id);
 // Takım listesi: kaleci her zaman en üstte.
 const teamOf = (d, team) => d.players.filter(p => p.team === team).sort((a, b) => Number(!!b.goalkeeper) - Number(!!a.goalkeeper));
+// Kadro = oynayacaklar (A, B, bekleyenler). Yedekler kapasite dışında, kayıt sırasıyla bekler.
+const roster = d => d.players.filter(p => p.team !== 'reserve');
+const reserves = d => d.players.filter(p => p.team === 'reserve');
+const paidCount = d => roster(d).filter(p => p.paid).length;
+const isHttpUrl = s => { try { return ['https:', 'http:'].includes(new URL(s).protocol); } catch { return false; } };
 
-// Saha ücreti kapasiteye değil kayıtlı oyuncu sayısına bölünür; ücret eksik kalmasın diye yukarı yuvarlanır.
+// Saha ücreti kapasiteye değil kadrodaki oyuncu sayısına bölünür; ücret eksik kalmasın diye yukarı yuvarlanır.
 function priceText(d) {
   if (!(d.price > 0)) return '';
-  const n = d.players.length;
+  const n = roster(d).length;
   return n ? `Kişi başı ${money(Math.ceil(d.price / n))}` : `Saha ücreti ${money(d.price)}`;
+}
+
+// "Emre (3), Can (2), Oğul" — en çok atan başta.
+function scorersText(d) {
+  return d.players.filter(p => p.goals > 0).sort((a, b) => b.goals - a.goals)
+    .map(p => (p.goals > 1 ? `${p.name} (${p.goals})` : p.name)).join(', ');
+}
+
+function winnerText(r) {
+  if (r.A === r.B) return 'Berabere';
+  return `${r.A > r.B ? 'A' : 'B'} kazandı`;
 }
 
 // ---------- Diziliş ----------
@@ -63,7 +80,10 @@ const PRESETS = {
 };
 const shapeKey = shape => shape.join('-');
 // Orta sahasız dizilişler kısaca yazılır (2-0-1 → 2-1); diğer boş hatlar karışmasın diye 0 olarak kalır.
-const shapeLabel = ([back, mid, front]) => (mid === 0 && back > 0 && front > 0 ? `${back}-${front}` : [back, mid, front].join('-'));
+const shapeLabel = ([back, mid, front]) => {
+  if (back + mid + front < 3) return ''; // 1-2 saha oyuncusunda diziliş anlamsız
+  return mid === 0 && back > 0 && front > 0 ? `${back}-${front}` : [back, mid, front].join('-');
+};
 
 function presetsFor(n) {
   if (n < 1) return [];
@@ -88,6 +108,7 @@ function lineup(d, team) {
 }
 
 const orderedTeam = (d, team) => {
+  if (team === 'reserve') return reserves(d);
   if (team === 'bench') return teamOf(d, 'bench');
   const { gk, lines } = lineup(d, team);
   return [...(gk ? [gk] : []), ...LINES.flatMap(k => lines[k])];
@@ -95,7 +116,7 @@ const orderedTeam = (d, team) => {
 
 // Kaydetmeden önce mevkiler sabitlenir: takımdaki herkesin bir hattı olur, bekleyen ve kalecilerde mevki tutulmaz.
 function settle(d) {
-  for (const p of d.players) if (p.team === 'bench' || p.goalkeeper) delete p.pos;
+  for (const p of d.players) if (p.team === 'bench' || p.team === 'reserve' || p.goalkeeper) delete p.pos;
   for (const t of ['A', 'B']) {
     const { lines } = lineup(d, t);
     for (const k of LINES) for (const p of lines[k]) p.pos = k;
@@ -233,7 +254,14 @@ async function save(id, change) {
   const next = structuredClone(u.data);
   change(next);
   const meta = findMatch(id);
-  if (next.players.length > meta.capacity) throw Error('Kadro dolu.');
+  // Kadroda yer açıldıysa sıradaki yedekler bekleyenlere geçer.
+  const promoted = [];
+  let free = meta.capacity - roster(next).length;
+  for (const p of next.players) {
+    if (free <= 0) break;
+    if (p.team === 'reserve') { p.team = 'bench'; promoted.push(p.name); free--; }
+  }
+  if (roster(next).length > meta.capacity) throw Error('Kadro dolu. Yedekten almak için önce kadrodan birinin çıkması lazım.');
   for (const t of ['A', 'B']) {
     if (next.players.filter(x => x.team === t && x.goalkeeper).length > 1) throw Error(`${TEAMS[t].label} kalesinde zaten bir kaleci var.`);
   }
@@ -244,6 +272,7 @@ async function save(id, change) {
     u.data = next;
     u.revision = response.revision;
     render();
+    return { promoted };
   } catch (e) {
     if (e.status === 409 || e.message.includes('güncellendi')) {
       const fresh = await request(`/matches/${id}`);
@@ -261,12 +290,14 @@ async function addPlayer(id, name, goalkeeper) {
   const u = state.unlocked.get(id);
   if (!name) throw Error('Adını yaz.');
   if (u.data.players.some(p => p.name.toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR'))) throw Error('Bu isim zaten kadroda.');
-  let team = 'bench';
+  const result = { team: 'bench', place: 0 };
   await save(id, d => {
-    team = goalkeeper ? (['A', 'B'].find(t => !d.players.some(p => p.team === t && p.goalkeeper)) || 'bench') : 'bench';
-    d.players.push({ id: crypto.randomUUID(), name, goalkeeper, team });
+    if (roster(d).length >= findMatch(id).capacity) result.team = 'reserve';
+    else if (goalkeeper) result.team = ['A', 'B'].find(t => !d.players.some(p => p.team === t && p.goalkeeper)) || 'bench';
+    d.players.push({ id: crypto.randomUUID(), name, goalkeeper, team: result.team });
+    result.place = reserves(d).length;
   });
-  return team;
+  return result;
 }
 
 // pos verilmezse oyuncu yeni takımında boşluğu olan hatta yerleşir.
@@ -298,30 +329,46 @@ async function setGoalkeeper(id, playerId, on) {
     if (!p) throw Error('Oyuncu bulunamadı.');
     result.name = p.name;
     p.goalkeeper = on;
-    if (p.team !== 'bench') { p.team = 'bench'; result.moved = true; }
+    if (p.team === 'A' || p.team === 'B') { p.team = 'bench'; result.moved = true; }
   });
   return result;
 }
 
 async function removePlayer(id, playerId) {
-  await save(id, d => { d.players = d.players.filter(p => p.id !== playerId); });
+  return save(id, d => { d.players = d.players.filter(p => p.id !== playerId); });
+}
+
+async function setPaid(id, playerId, on) {
+  let name = '';
+  await save(id, d => {
+    const p = d.players.find(x => x.id === playerId);
+    if (!p) throw Error('Oyuncu bulunamadı.');
+    name = p.name;
+    if (on) p.paid = true; else delete p.paid;
+  });
+  return name;
 }
 
 function whatsappText(meta, d) {
   const dt = when(meta);
-  const n = d.players.length;
+  const n = roster(d).length;
+  const extra = reserves(d).length;
   const missing = meta.capacity - n;
+  const paid = paidCount(d);
   const lines = [`⚽ *${meta.place}*`, `📅 ${longDay(dt)}, ${clock(dt)}`];
-  if (d.price > 0) lines.push(`💸 ${priceText(d)}${n ? ` (toplam ${money(d.price)})` : ''}`);
-  lines.push(`👥 ${n}/${meta.capacity}${missing > 0 ? ` (${missing} kişi eksik)` : ', kadro tamam'}`);
+  if (d.result) lines.push(`🏁 *Skor:* Takım A ${d.result.A} - ${d.result.B} Takım B (${winnerText(d.result)})`);
+  if (scorersText(d)) lines.push(`⚽ Goller: ${scorersText(d)}`);
+  if (d.video && isHttpUrl(d.video)) lines.push(`🎥 Maç videosu: ${d.video}`);
+  if (d.price > 0) lines.push(`💸 ${priceText(d)}${n ? ` (toplam ${money(d.price)})` : ''}${paid ? `, ${paid}/${n} ödedi` : ''}`);
+  lines.push(`👥 ${n + extra}/${meta.capacity}${missing > 0 ? ` (${missing} kişi eksik)` : `, kadro tamam${extra ? `, ${extra} yedek` : ''}`}`);
   if (d.notes) lines.push(`📝 ${d.notes}`);
-  for (const t of ['A', 'B', 'bench']) {
+  for (const t of ['A', 'B', 'bench', 'reserve']) {
     const people = orderedTeam(d, t);
-    if (t === 'bench' && !people.length) continue;
-    const shape = t === 'bench' ? '' : shapeLabel(lineup(d, t).shape);
+    if ((t === 'bench' || t === 'reserve') && !people.length) continue;
+    const shape = t === 'A' || t === 'B' ? shapeLabel(lineup(d, t).shape) : '';
     lines.push('', `${TEAMS[t].emoji} *${TEAMS[t].label}* (${people.length})${shape ? ` · ${shape}` : ''}`);
     if (!people.length) lines.push('—');
-    people.forEach((p, i) => lines.push(`${i + 1}. ${p.name}${p.goalkeeper ? ' 🧤' : ''}`));
+    people.forEach((p, i) => lines.push(`${i + 1}. ${p.name}${p.goalkeeper ? ' 🧤' : ''}${p.goals ? ` ⚽${p.goals > 1 ? p.goals : ''}` : ''}${paid && p.paid && t !== 'reserve' ? ' ✅' : ''}`));
   }
   return lines.join('\n');
 }
@@ -369,17 +416,27 @@ function cardHtml(meta) {
   const d = u?.data;
   const id = esc(meta.id);
   const dt = when(meta);
-  const n = d ? d.players.length : 0;
+  const n = d ? roster(d).length : 0;
+  const total = d ? d.players.length : 0;
+  const extra = total - n;
   const missing = meta.capacity - n;
-  const status = d
-    ? `<div class="count"><b>${n}</b>/${meta.capacity}</div><small class="${missing > 0 ? 'missing' : 'full'}">${missing > 0 ? `${missing} kişi eksik` : 'Kadro tamam'}</small>`
-    : `<button class="btn primary" data-action="unlock" data-id="${id}">🔒 Maçı aç</button>`;
+  const paid = d ? paidCount(d) : 0;
+  let status;
+  if (!d) {
+    status = `<button class="btn primary" data-action="unlock" data-id="${id}">🔒 Maçı aç</button>`;
+  } else if (d.result) {
+    const { A, B } = d.result;
+    status = `<div class="final" aria-label="Maç sonucu"><span class="tag a">A</span><b>${Number(A)}</b><i>:</i><b>${Number(B)}</b><span class="tag b">B</span></div><small class="${A === B ? 'draw' : A > B ? 'win-a' : 'win-b'}">${winnerText(d.result)}</small>`;
+  } else {
+    // Yedekler de sayılır: 17/16 = kadro dolu, 1 yedek.
+    status = `<div class="count"><b>${total}</b>/${meta.capacity}</div><small class="${missing > 0 ? 'missing' : 'full'}">${missing > 0 ? `${missing} kişi eksik` : extra ? `Kadro tamam, ${extra} yedek` : 'Kadro tamam'}</small>`;
+  }
   return `<article class="match${d ? ' open' : ''}${isPast(meta) ? ' past' : ''}" id="mac-${id}">
     <div class="match-top">
       <div class="date"><b>${dt.getDate()}</b><span>${esc(fmt(dt, { month: 'short' }))}</span></div>
       <div class="info">
         <h3>${esc(meta.place)}</h3>
-        <p class="when"><span>${esc(fmt(dt, { weekday: 'long' }))}, ${esc(clock(dt))}</span>${d && d.price > 0 ? `<span class="price">${priceText(d)}</span>` : ''}${d ? '' : `<span>${meta.capacity} kişilik</span>`}</p>
+        <p class="when"><span>${esc(fmt(dt, { weekday: 'long' }))}, ${esc(clock(dt))}</span>${d && d.price > 0 ? `<span class="price">${priceText(d)}</span>` : ''}${d && d.price > 0 && paid ? `<span class="paid-count">${paid}/${n} ödedi</span>` : ''}${d ? '' : `<span>${meta.capacity} kişilik</span>`}</p>
         ${d?.notes ? `<p class="notes">${esc(d.notes)}</p>` : ''}
         ${d ? `<button type="button" class="edit-link" data-action="edit" data-id="${id}">${d.notes ? 'Açıklamayı düzenle' : 'Açıklama ekle'}</button>` : ''}
       </div>
@@ -392,26 +449,34 @@ function cardHtml(meta) {
 function boardHtml(meta, d) {
   const id = esc(meta.id);
   const view = state.views.get(meta.id) || 'pitch';
-  const full = d.players.length >= meta.capacity;
+  const full = roster(d).length >= meta.capacity;
+  const started = isPast(meta);
+  const video = d.video && isHttpUrl(d.video) ? d.video : '';
+  const scorers = scorersText(d);
   const tab = (v, label) => `<button role="tab" aria-selected="${view === v}" data-action="view" data-view="${v}" data-id="${id}">${label}</button>`;
-  const join = isPast(meta) ? '' : `<button class="btn primary" data-action="join" data-id="${id}" ${full ? 'disabled' : ''}>${full ? 'Kadro dolu' : '+ Kadroya yazıl'}</button>`;
+  // Maç başlamadan kayıt, başladıktan sonra sonuç ve video.
+  const join = started ? '' : `<button class="btn primary" data-action="join" data-id="${id}">${full ? '+ Yedeğe yazıl' : '+ Kadroya yazıl'}</button>`;
+  const videoBtn = video ? `<a class="btn primary" href="${esc(video)}" target="_blank" rel="noopener noreferrer">🎥 Maç videosu</a>` : '';
+  const resultBtn = started ? `<button class="btn${d.result || video ? '' : ' primary'}" data-action="result" data-id="${id}">⚽ ${d.result || video ? 'Sonucu düzenle' : 'Sonucu gir'}</button>` : '';
   return `<div class="board">
     <div class="board-head">
       <div class="switch" role="tablist" aria-label="Görünüm">${tab('pitch', 'Saha')}${tab('list', 'Liste')}</div>
-      <div class="score" aria-label="Takım sayıları"><span class="tag a">A</span>${teamOf(d, 'A').length}<i>:</i>${teamOf(d, 'B').length}<span class="tag b">B</span></div>
+      ${d.result ? '' : `<div class="score" aria-label="Takım sayıları"><span class="tag a">A</span>${teamOf(d, 'A').length}<i>:</i>${teamOf(d, 'B').length}<span class="tag b">B</span></div>`}
     </div>
-    ${view === 'pitch' ? pitchHtml(id, d) : rosterHtml(d)}
+    ${scorers ? `<p class="scorers">⚽ ${esc(scorers)}</p>` : ''}
+    ${view === 'pitch' ? pitchHtml(id, d) : rosterHtml(id, d)}
     <div class="board-actions">
-      ${join}
+      ${join}${videoBtn}${resultBtn}
       <button class="btn" data-action="copy" data-id="${id}">📋 Listeyi kopyala</button>
       <button class="btn" data-action="share" data-id="${id}">🔗 Bağlantıyı paylaş</button>
     </div>
   </div>`;
 }
 
-function chipHtml(mid, p) {
-  const cls = p.team === 'A' ? 'a' : p.team === 'B' ? 'b' : 'bench';
-  return `<div class="chip ${cls}${p.goalkeeper ? ' gk' : ''}" role="button" tabindex="0" draggable="true" data-action="player" data-id="${mid}" data-player="${esc(p.id)}" title="${esc(p.name)}">${p.goalkeeper ? '<span aria-label="Kaleci">🧤</span>' : ''}<span class="nm">${esc(p.name)}</span></div>`;
+function chipHtml(mid, p, order) {
+  const cls = { A: 'a', B: 'b', reserve: 'reserve' }[p.team] || 'bench';
+  const goals = Number(p.goals) || 0;
+  return `<div class="chip ${cls}${p.goalkeeper ? ' gk' : ''}" role="button" tabindex="0" draggable="true" data-action="player" data-id="${mid}" data-player="${esc(p.id)}" title="${esc(p.name)}">${order ? `<span class="ord">${order}</span>` : ''}${p.goalkeeper ? '<span aria-label="Kaleci">🧤</span>' : ''}<span class="nm">${esc(p.name)}</span>${goals ? `<span class="goals" aria-label="${goals} gol">⚽${goals > 1 ? goals : ''}</span>` : ''}</div>`;
 }
 
 // Saha yarısı: ceza sahasında kaleci, sonra kaleden orta çizgiye defans, orta saha, forvet hatları.
@@ -449,15 +514,36 @@ function pitchHtml(mid, d) {
       <span class="label">Bekleyenler<b>${bench.length}</b></span>
       <div class="bench-list">${bench.map(p => chipHtml(mid, p)).join('')}</div>
     </div>
+    ${reservesRowHtml(mid, d)}
     <p class="hint-line">Oyuncuya dokun: takımını ya da mevkisini değiştir, kaleci yap.</p>`;
 }
 
-function rosterHtml(d) {
-  const cols = ['A', 'B', 'bench'].map(t => ({ t, people: orderedTeam(d, t) })).filter(c => c.t !== 'bench' || c.people.length);
-  return `<div class="roster">${cols.map(({ t, people }) => `<section class="roster-col ${t === 'bench' ? 'bench' : t.toLowerCase()}">
-      <h4>${TEAMS[t].label}<span>${people.length}${t !== 'bench' && shapeLabel(lineup(d, t).shape) ? ` · ${shapeLabel(lineup(d, t).shape)}` : ''}</span></h4>
-      ${people.length ? `<ol>${people.map(p => `<li>${esc(p.name)}${p.goalkeeper ? ' 🧤' : ''}</li>`).join('')}</ol>` : '<p class="muted">Henüz kimse yok</p>'}
-    </section>`).join('')}</div>`;
+function reservesRowHtml(mid, d) {
+  const extra = reserves(d);
+  if (!extra.length) return '';
+  return `<div class="bench-row reserve-row" title="Kadrodan biri çıkarsa sıradaki yedek otomatik girer.">
+      <span class="label">Yedekler<b>${extra.length}</b></span>
+      <div class="bench-list">${extra.map((p, i) => chipHtml(mid, p, i + 1)).join('')}</div>
+    </div>`;
+}
+
+function rosterHtml(mid, d) {
+  const showPaid = d.price > 0;
+  const cols = ['A', 'B', 'bench', 'reserve'].map(t => ({ t, people: orderedTeam(d, t) })).filter(c => c.t === 'A' || c.t === 'B' || c.people.length);
+  const item = (p, t) => {
+    const goals = Number(p.goals) || 0;
+    const paidBtn = showPaid && t !== 'reserve'
+      ? `<button type="button" class="paid-btn" data-action="paid" data-id="${mid}" data-player="${esc(p.id)}" aria-pressed="${!!p.paid}">${p.paid ? '✓ Ödedi' : 'Ödemedi'}</button>`
+      : '';
+    return `<li><div class="row"><span class="nm">${esc(p.name)}${p.goalkeeper ? ' 🧤' : ''}${goals ? ` ⚽${goals > 1 ? goals : ''}` : ''}</span>${paidBtn}</div></li>`;
+  };
+  return `<div class="roster">${cols.map(({ t, people }) => {
+    const shape = t === 'A' || t === 'B' ? shapeLabel(lineup(d, t).shape) : '';
+    return `<section class="roster-col ${{ A: 'a', B: 'b', reserve: 'reserve' }[t] || 'bench'}">
+      <h4>${TEAMS[t].label}<span>${people.length}${shape ? ` · ${shape}` : ''}</span></h4>
+      ${people.length ? `<ol>${people.map(p => item(p, t)).join('')}</ol>` : '<p class="muted">Henüz kimse yok</p>'}
+    </section>`;
+  }).join('')}</div>`;
 }
 
 // ---------- Pencereler ----------
@@ -481,9 +567,32 @@ function openUnlock(id) {
 
 function openJoin(id) {
   state.pendingId = id;
-  $('#joinInfo').textContent = findMatch(id)?.place || '';
+  const m = findMatch(id);
+  const full = roster(state.unlocked.get(id).data).length >= m.capacity;
+  $('#joinInfo').textContent = full ? 'Kadro dolu. Yedek listesine yazılırsın; kadrodan biri çıkarsa sıradaki yedek otomatik girer.' : m.place;
   $('#joinForm').reset();
+  $('#joinForm button[type=submit]').textContent = full ? 'Yedeğe yazıl' : 'Kadroya yazıl';
   openDialog('joinDialog');
+}
+
+function openResult(id) {
+  const d = state.unlocked.get(id)?.data;
+  if (!d) return;
+  state.pendingId = id;
+  const f = $('#resultForm');
+  f.elements.scoreA.value = d.result ? d.result.A : '';
+  f.elements.scoreB.value = d.result ? d.result.B : '';
+  f.elements.video.value = d.video || '';
+  const rows = ['A', 'B'].flatMap(t => orderedTeam(d, t).map(p => `<div class="goal-row ${t.toLowerCase()}">
+      <span class="nm">${p.goalkeeper ? '🧤 ' : ''}${esc(p.name)}</span>
+      <div class="stepper">
+        <button type="button" data-step="-1" aria-label="${esc(p.name)}: bir gol eksilt">−</button>
+        <input type="number" min="0" max="99" inputmode="numeric" data-player="${esc(p.id)}" value="${Number(p.goals) || 0}" aria-label="${esc(p.name)} gol sayısı">
+        <button type="button" data-step="1" aria-label="${esc(p.name)}: bir gol ekle">+</button>
+      </div>
+    </div>`));
+  $('#goalList').innerHTML = rows.length ? rows.join('') : '<p class="small muted">Takımlarda oyuncu yok.</p>';
+  openDialog('resultDialog');
 }
 
 function openEdit(id) {
@@ -502,10 +611,16 @@ function openPlayer(mid, pid) {
   if (!p) return;
   state.sheet = { mid, pid };
   $('#playerName').textContent = p.name;
+  const d = state.unlocked.get(mid).data;
+  const isReserve = p.team === 'reserve';
   $('#gkToggle').checked = !!p.goalkeeper;
-  $('#gkHint').hidden = p.team === 'bench';
+  $('#gkHint').hidden = p.team !== 'A' && p.team !== 'B';
+  $('#paidToggle').checked = !!p.paid;
+  $('#paidWrap').hidden = isReserve || !(d.price > 0);
+  $('#reserveHint').hidden = !isReserve;
+  if (isReserve) $('#reserveHint').textContent = `Yedek listesinde ${reserves(d).indexOf(p) + 1}. sırada. Kadroda yer açılınca otomatik girer.`;
   $$('#playerDialog [data-team]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.team === p.team)));
-  const onField = p.team !== 'bench' && !p.goalkeeper;
+  const onField = (p.team === 'A' || p.team === 'B') && !p.goalkeeper;
   $('#posWrap').hidden = !onField;
   if (onField) {
     const { lines } = lineup(state.unlocked.get(mid).data, p.team);
@@ -521,7 +636,9 @@ const actions = {
   unlock: id => openUnlock(id),
   join: id => openJoin(id),
   edit: id => openEdit(id),
+  result: id => openResult(id),
   player: (id, el) => openPlayer(id, el.dataset.player),
+  paid: (id, el) => run(() => setPaid(id, el.dataset.player, el.getAttribute('aria-pressed') !== 'true')),
   view: (id, el) => { state.views.set(id, el.dataset.view); render(); },
   next: id => {
     const m = findMatch(id);
@@ -596,9 +713,10 @@ $('#joinForm').addEventListener('submit', e => {
   e.preventDefault();
   const f = e.currentTarget;
   run(async () => {
-    const team = await addPlayer(state.pendingId, f.elements.name.value.trim(), f.elements.goalkeeper.checked);
+    const { team, place } = await addPlayer(state.pendingId, f.elements.name.value.trim(), f.elements.goalkeeper.checked);
     closeDialog('joinDialog');
-    toast(team === 'bench' ? 'Kadroya yazıldın.' : `Kadroya yazıldın, ${TEAMS[team].label} kalesindesin.`);
+    if (team === 'reserve') toast(`Yedeğe yazıldın, ${place}. sıradasın.`);
+    else toast(team === 'bench' ? 'Kadroya yazıldın.' : `Kadroya yazıldın, ${TEAMS[team].label} kalesindesin.`);
   });
 });
 
@@ -611,6 +729,46 @@ $('#editForm').addEventListener('submit', e => {
     await save(state.pendingId, d => { d.notes = notes; d.price = price; });
     closeDialog('editDialog');
     toast('Maç bilgileri kaydedildi.');
+  });
+});
+
+$('#paidToggle').addEventListener('change', e => {
+  const { mid, pid } = state.sheet;
+  const on = e.target.checked;
+  run(async () => {
+    const name = await setPaid(mid, pid, on);
+    closeDialog('playerDialog');
+    toast(on ? `${name} ödedi.` : `${name} ödemedi olarak işaretlendi.`);
+  }, () => { e.target.checked = !on; });
+});
+
+$('#goalList').addEventListener('click', e => {
+  const b = e.target.closest('button[data-step]');
+  if (!b) return;
+  const input = b.parentElement.querySelector('input');
+  input.value = Math.min(99, Math.max(0, (parseInt(input.value, 10) || 0) + Number(b.dataset.step)));
+});
+
+$('#resultForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const f = e.currentTarget;
+  const a = f.elements.scoreA.value.trim();
+  const b = f.elements.scoreB.value.trim();
+  const video = f.elements.video.value.trim();
+  if ((a === '') !== (b === '')) { showError('İki takımın skorunu da gir ya da ikisini de boş bırak.'); return; }
+  if (video && !isHttpUrl(video)) { showError('Video bağlantısı https:// ile başlamalı.'); return; }
+  const goals = new Map($$('#goalList input').map(i => [i.dataset.player, Math.min(99, Math.max(0, parseInt(i.value, 10) || 0))]));
+  run(async () => {
+    await save(state.pendingId, d => {
+      if (a === '') delete d.result; else d.result = { A: Number(a), B: Number(b) };
+      if (video) d.video = video; else delete d.video;
+      for (const p of d.players) {
+        if (!goals.has(p.id)) continue;
+        if (goals.get(p.id)) p.goals = goals.get(p.id); else delete p.goals;
+      }
+    });
+    closeDialog('resultDialog');
+    toast('Maç sonucu kaydedildi.');
   });
 });
 
@@ -647,8 +805,9 @@ $('#removePlayer').addEventListener('click', () => {
   const { mid, pid } = state.sheet;
   if (!confirm(`${$('#playerName').textContent} kadrodan çıkarılsın mı?`)) return;
   run(async () => {
-    await removePlayer(mid, pid);
+    const { promoted } = await removePlayer(mid, pid);
     closeDialog('playerDialog');
+    if (promoted.length) toast(`${promoted.join(', ')} yedekten kadroya girdi.`);
   });
 });
 

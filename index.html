@@ -100,11 +100,33 @@
   </form>
 </dialog>
 
+<dialog id="resultDialog" class="modal">
+  <form id="resultForm" class="dialog-body">
+    <div class="modal-head"><h2>Maç sonucu</h2><button type="button" class="close" data-close="resultDialog" aria-label="Kapat">✕</button></div>
+    <div class="score-input">
+      <label class="a">Takım A<input name="scoreA" type="number" min="0" max="99" inputmode="numeric" placeholder="–"></label>
+      <span aria-hidden="true">:</span>
+      <label class="b">Takım B<input name="scoreB" type="number" min="0" max="99" inputmode="numeric" placeholder="–"></label>
+    </div>
+    <div class="goal-block">
+      <p class="pick-label">Goller</p>
+      <div id="goalList" class="goal-list"></div>
+    </div>
+    <label>Maç videosu <span class="hint">Sosyal Halısaha linki</span><input name="video" type="url" inputmode="url" placeholder="https://…" autocomplete="off"></label>
+    <p class="dialog-error" hidden></p>
+    <div class="modal-actions"><button type="button" class="btn" data-close="resultDialog">Vazgeç</button><button class="btn primary" type="submit">Kaydet</button></div>
+  </form>
+</dialog>
+
 <dialog id="playerDialog" class="modal">
   <div class="dialog-body">
     <div class="modal-head"><h2 id="playerName"></h2><button type="button" class="close" data-close="playerDialog" aria-label="Kapat">✕</button></div>
-    <label class="gk-toggle"><span>🧤 Kaleci</span><input id="gkToggle" type="checkbox"></label>
-    <p id="gkHint" class="small muted">Takımdayken değiştirirsen bekleyenlere alınır.</p>
+    <p id="reserveHint" class="small muted" hidden></p>
+    <div class="toggles">
+      <label class="gk-toggle"><span>🧤 Kaleci</span><input id="gkToggle" type="checkbox"></label>
+      <label id="paidWrap" class="gk-toggle"><span>💸 Ödedi</span><input id="paidToggle" type="checkbox"></label>
+    </div>
+    <p id="gkHint" class="small muted">Kalecilik değişirse oyuncu bekleyenlere alınır.</p>
     <div class="team-pick" role="group" aria-label="Takım">
       <button type="button" class="a" data-team="A">Takım A</button>
       <button type="button" class="b" data-team="B">Takım B</button>
